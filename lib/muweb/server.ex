@@ -7,6 +7,7 @@ defmodule HttpReq do
     proto: nil,
     version: nil,
     body: "",
+    conn: nil,
   ]
 end
 
@@ -32,8 +33,7 @@ defmodule Muweb.Server do
     * port        -- port number to listen on
     * router      -- a module that implements the router API
                      (will be used instead of the handler if provided)
-    * handler     -- a function that takes the request, the connection and current
-                     state
+    * handler     -- a function that takes the request and current state
     * state       -- initial state
     * log_enabled -- whether logging is enabled
 
@@ -88,7 +88,7 @@ defmodule Muweb.Server do
 
     :random.seed(:erlang.now())
 
-    client_loop(sock, req_handler, %HttpReq{}, state, log?)
+    client_loop(sock, req_handler, %HttpReq{conn: sock}, state, log?)
   end
 
   # The receive loop which waits for a packet from the client, then invokes the
@@ -128,7 +128,7 @@ defmodule Muweb.Server do
         if req_handler do
           log log?, "#{inspect pid}: processing request #{req.method} #{req.path}"
           updated_req = %HttpReq{req | body: data, method: normalize_method(req.method)}
-          case handle_req(req_handler, updated_req, sock, state) do
+          case handle_req(req_handler, updated_req, state) do
             {:reply, data} ->
               length = byte_size(data)
               :gen_tcp.send(sock, "HTTP/1.1 200 OK\r\nContent-Length: #{length}\r\n\r\n#{data}")
@@ -210,11 +210,11 @@ defmodule Muweb.Server do
   #defp format_resp(%HttpResp{}=resp) do
 
 
-  defp handle_req({:fun, handler}, req, sock, state),
-    do: handler.(req, sock, state)
+  defp handle_req({:fun, handler}, req, state),
+    do: handler.(req, state)
 
-  defp handle_req({:module, {mod, opts}}, %HttpReq{method: method, path: path}=req, sock, _) do
-    mod.handle(method, split_path(path), req, opts, sock)
+  defp handle_req({:module, {mod, opts}}, %HttpReq{method: method, path: path}=req, _) do
+    mod.handle(method, split_path(path), req, opts)
   end
 
   defp normalize_method(:GET),     do: :get

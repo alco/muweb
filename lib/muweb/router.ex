@@ -20,17 +20,12 @@ defmodule Muweb.Router do
   defmacro __using__(_) do
     quote do
       @before_compile unquote(__MODULE__)
-
       import Muweb.Router.Mixin
-      #import Muweb.StockHandlers
-
-      #Module.register_attribute(__MODULE__, :mu_web_router_params, accumulate: true)
     end
   end
 
   @doc false
   defmacro __before_compile__(_env) do
-    #IO.inspect List.flatten(Module.get_attribute(env.module, :mu_web_router_params))
     quote do
       def init(opts) do
         {__MODULE__, opts}
@@ -77,14 +72,6 @@ defmodule Muweb.Router.Mixin do
 
 
   @doc """
-  Declare the list of parameters that will be passed to the `init/1` function.
-  """
-  defmacro params(list) when is_list(list) do
-    # FIXME: implement checking of available parameters
-    #quote do: (@mu_web_router_params unquote(list))
-  end
-
-  @doc """
   Retrieve the named parameter from the initial value passed to the user
   router module's `init/1` function.
 
@@ -92,8 +79,6 @@ defmodule Muweb.Router.Mixin do
 
       defmodule MyRouter do
         use Muweb.Router
-
-        params [:root_dir]
 
         handle _, :get, &static_handler, root: param(:root_dir)
       end
@@ -155,8 +140,8 @@ defmodule Muweb.Router.Mixin do
   defp do_mount(path, module, _opts) do
     components = path_components(path)
     q = quote do
-      def handle(method, [unquote_splicing(components) | rest], req, init_opts, conn) do
-        unquote(module).handle(method, rest, req, init_opts, conn)
+      def handle(method, [unquote_splicing(components) | rest], req, init_opts) do
+        unquote(module).handle(method, rest, req, init_opts)
       end
     end
     #q |> Macro.to_string |> IO.puts
@@ -231,9 +216,9 @@ defmodule Muweb.Router.Mixin do
     quoted_body = quote_handler(handler, opts)
 
     quoted_head = if match?({:_, _, nil}, method) do
-      quote do: handle(_, unquote(matchspec), var!(req), var!(_init_opts), var!(conn))
+      quote do: handle(_, unquote(matchspec), var!(req), var!(_init_opts))
     else
-      quote do: handle(method, unquote(matchspec), var!(req), var!(_init_opts), var!(conn)) when method in unquote(methods)
+      quote do: handle(method, unquote(matchspec), var!(req), var!(_init_opts)) when method in unquote(methods)
     end
 
     q = quote do
@@ -289,8 +274,8 @@ defmodule Muweb.Router.Mixin do
   defp quote_handler(handler, opts) do
     case handler do
       {:func, {:&, meta, [arg]}} ->
-        func = {:&, meta, [{:/, meta, [arg, 4]}]}
-        quote do: unquote(func).(path, unquote(opts), var!(conn), var!(req))
+        func = {:&, meta, [{:/, meta, [arg, 3]}]}
+        quote do: unquote(func).(path, unquote(opts), var!(req))
 
       {:wrap, [{fun, _, _}, arguments]} ->
         wrap_fun(fun, arguments, [])
@@ -300,7 +285,7 @@ defmodule Muweb.Router.Mixin do
 
       {:code, code} ->
         quote do
-          use Muweb.Handler
+          import Muweb.Handler
           unquote(code)
         end
     end
@@ -309,9 +294,9 @@ defmodule Muweb.Router.Mixin do
   defp wrap_fun(fun, args, opts) do
     funcall = {fun, [], args}
     quote do
-      use Muweb.Handler
+      import Muweb.Handler
       val = unquote(funcall)
-      reply(unquote(opts[:status] || 200), to_string(val))
+      ireply(unquote(opts[:status] || 200), to_string(val))
     end
   end
 end

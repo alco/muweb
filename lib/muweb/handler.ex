@@ -1,77 +1,64 @@
 defmodule Muweb.Handler do
   @proto_version "1.1"
 
-  defmacro __using__(_) do
+  # The macros are used inside handlers that are defined inline in the router
+
+  defmacro ireply(status, data \\ nil, opts \\ []) do
     quote do
-      #import Kernel, except: [def: 2]
-      import unquote(__MODULE__), only: :macros
+      unquote(__MODULE__).reply(var!(req), unquote(status), unquote(data), unquote(opts))
     end
   end
 
-
-  defmacro reply(status) do
+  defmacro ireply_file(status, path, opts \\ []) do
     quote do
-      unquote(__MODULE__).reply(unquote(status), nil, [], var!(conn), var!(req))
+      unquote(__MODULE__).reply_file(var!(req), unquote(status), unquote(path), unquote(opts))
     end
   end
 
-  defmacro reply(status, data) do
+  defmacro iabort() do
     quote do
-      unquote(__MODULE__).reply(unquote(status), unquote(data), [], var!(conn), var!(req))
+      unquote(__MODULE__).close(var!(req).conn)
     end
   end
 
-  defmacro reply(status, data, opts) do
+  defmacro iquery(key, default \\ nil) do
     quote do
-      unquote(__MODULE__).reply(unquote(status), unquote(data), unquote(opts), var!(conn), var!(req))
+      unquote(__MODULE__).query(var!(req), unquote(key), unquote(default))
     end
   end
 
-  defmacro reply_file(status, path, opts \\ []) do
-    quote do
-      unquote(__MODULE__).reply_file(unquote(status), unquote(path), unquote(opts), var!(conn), var!(req))
-    end
-  end
-
-  defmacro abort() do
-    quote do
-      unquote(__MODULE__).close_connection(var!(conn))
-    end
-  end
-
-  defmacro query(key, default \\ nil) do
-    quote do
-      Map.get(URI.decode_query(var!(req).query), unquote(key), unquote(default))
-    end
-  end
-
-  defmacro req() do
+  defmacro ireq() do
     quote do: var!(req)
   end
 
-  def close_connection(_conn) do
+
+  def query(req, key, default \\ nil) do
+    Map.get(URI.decode_query(req.query), key, default)
+  end
+
+  def close(_req) do
     :noreply
   end
 
-  def reply(status, data, opts, conn, req) do
+  def reply(req, status, data \\ nil, opts \\ []) do
     headers = opts[:headers] || %{}
     if data && !Map.get(headers, "content-length") do
       headers = Map.put(headers, "content-length", byte_size(data))
     end
-    if req().method == :head do
+    if req.method == :head do
       data = nil
     end
-    reply_http(conn, status, headers, data)
+    reply_http(req.conn, status, headers, data)
   end
 
-  def reply_file(status, path, opts, conn, req) do
+  def reply_file(req, status, path, opts \\ []) do
     headers = opts[:headers] || %{}
     {status, data} = case File.stat(path) do
       {:error, :enoent} -> {404, "Not Found"}
       {:ok, %File.Stat{type: :directory}} -> {404, "Not Found"}
 
       {:ok, %File.Stat{size: size}} ->
-        if req().method != :head do
+        if req.method != :head do
           data = File.read!(path)
         end
         if !Map.get(headers, "content-length") do
@@ -79,10 +66,10 @@ defmodule Muweb.Handler do
         end
         {status, data}
     end
-    if req().method == :head do
+    if req.method == :head do
       data = nil
     end
-    reply_http(conn, status, headers, data)
+    reply_http(req.conn, status, headers, data)
   end
 
 
