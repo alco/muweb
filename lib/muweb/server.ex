@@ -24,7 +24,7 @@ defmodule Muweb.Server do
     end
   end
 
-  defp log(msg, true), do: IO.puts "[µWeb] " <> msg
+  defp log(true, msg), do: IO.puts "[µWeb] " <> msg
   defp log(_, _), do: nil
 
   @doc """
