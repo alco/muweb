@@ -256,7 +256,7 @@ defmodule Muweb.Router.Mixin do
     components =
       path_components(path)
       |> Enum.map(fn
-        ":" <> name -> {binary_to_atom(name), [], context}
+        ":" <> name -> {String.to_atom(name), [], context}
         other       -> other
       end)
 

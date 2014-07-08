@@ -17,27 +17,36 @@ defmodule Muweb.Server do
   """
 
 
-  defp log(msg), do: IO.puts "[µWeb] " <> msg
-  #defp log(_), do: nil
+  defp dbg_log(msg) do
+    if Application.get_env(:muweb, :dbg_log_enabled) do
+      IO.puts "[µWeb] " <> msg
+    end
+  end
+
+  defp log(msg, true), do: IO.puts "[µWeb] " <> msg
+  defp log(_, _), do: nil
 
   @doc """
   Starts the server. Available options:
 
-    * port    -- port number listen on
-    * router  -- a module that implements the router API
-                 (will be used instead of handler if provided)
-    * handler -- a function of one argument
+    * port        -- port number to listen on
+    * router      -- a module that implements the router API
+                     (will be used instead of the handler if provided)
+    * handler     -- a function that takes the request, the connection and current
+                     state
+    * state       -- initial state
+    * log_enabled -- whether logging is enabled
 
   """
   def start(options \\ []) do
     port = Keyword.get(options, :port, 9000)
     case :gen_tcp.listen(port, [{:packet, :http_bin}, {:active, false}, {:reuseaddr, true}]) do
       {:ok, sock} ->
-        log "Listening on port #{port}..."
+        dbg_log "Listening on port #{port}..."
         accept_loop(sock, options)
 
       {:error, reason} ->
-        log "Error starting the server: #{reason}"
+        dbg_log "Error starting the server: #{reason}"
     end
   end
 
@@ -50,7 +59,7 @@ defmodule Muweb.Server do
         accept_loop(sock, options)
 
       {:error, reason} ->
-        log "Failed to accept on socket: #{reason}"
+        dbg_log "Failed to accept on socket: #{reason}"
     end
   end
 
@@ -59,31 +68,32 @@ defmodule Muweb.Server do
     if handler = options[:handler], do: req_handler = {:fun, handler}
     if router = options[:router], do: req_handler = {:module, router}
     state = options[:state]
+    log? = options[:log_enabled]
 
-    pid = spawn(fn -> client_start(sock, req_handler, state) end)
+    pid = spawn(fn -> client_start(sock, req_handler, state, log?) end)
     :ok = :gen_tcp.controlling_process(sock, pid)
   end
 
-  defp client_start(sock, req_handler, state) do
+  defp client_start(sock, req_handler, state, log?) do
     pid = self()
 
     # Get info about the client
     case :inet.peername(sock) do
       {:ok, {address, port}} ->
-        log "#{inspect pid}: got connection from a client: #{inspect address}:#{inspect port}"
+        log log?, "#{inspect pid}: got connection from a client: #{inspect address}:#{inspect port}"
 
       {:error, reason} ->
-        log "#{inspect pid}: got connection from an unknown client (#{reason})"
+        log log?, "#{inspect pid}: got connection from an unknown client (#{reason})"
     end
 
     :random.seed(:erlang.now())
 
-    client_loop(sock, req_handler, %HttpReq{}, state)
+    client_loop(sock, req_handler, %HttpReq{}, state, log?)
   end
 
   # The receive loop which waits for a packet from the client, then invokes the
   # handler function and sends its return value back to the client.
-  defp client_loop(sock, req_handler, req, state) do
+  defp client_loop(sock, req_handler, req, state, log?) do
     pid = self()
 
     :inet.setopts(sock, active: :once)
@@ -91,60 +101,60 @@ defmodule Muweb.Server do
     receive do
       # client part
       {:http, ^sock, {:http_response, version, status, status_str}} ->
-        log "#{inspect pid}: got initial response #{status} #{status_str} HTTP/#{format_version(version)}"
+        log log?, "#{inspect pid}: got initial response #{status} #{status_str} HTTP/#{format_version(version)}"
         updated_req = %HttpReq{req | version: version}
-        client_loop(sock, req_handler, updated_req, state)
+        client_loop(sock, req_handler, updated_req, state, log?)
 
       # server part
       {:http, ^sock, {:http_request, method, uri, version}} ->
         :inet.setopts(sock, [:binary, {:packet, :httph_bin}, {:active, :once}])
-        log "#{inspect pid}: got initial request #{method} #{inspect uri}"
+        log log?, "#{inspect pid}: got initial request #{method} #{inspect uri}"
         {path, query} = split_uri(uri)
         updated_req = %HttpReq{req | method: method,
                                        path: path,
                                       query: query,
                                     version: version}
-        client_loop(sock, req_handler, updated_req, state)
+        client_loop(sock, req_handler, updated_req, state, log?)
 
       {:http, ^sock, {:http_header, _, field, _reserved, value}} ->
-        log "#{inspect pid}: got header #{field}: #{value}"
+        log log?, "#{inspect pid}: got header #{field}: #{value}"
         updated_req = Map.update!(req, :headers, &[{to_string(field), value}|&1])
-        client_loop(sock, req_handler, updated_req, state)
+        client_loop(sock, req_handler, updated_req, state, log?)
 
       {:http, ^sock, :http_eoh} ->
         :inet.setopts(sock, [:binary, {:packet, :raw}, {:active, false}])
-        log "#{inspect pid}: reading request body"
+        log log?, "#{inspect pid}: reading request body"
         data = read_request_data(sock, req.headers)
         if req_handler do
-          log "#{inspect pid}: processing request #{req.method} #{req.path}"
+          log log?, "#{inspect pid}: processing request #{req.method} #{req.path}"
           updated_req = %HttpReq{req | body: data, method: normalize_method(req.method)}
           case handle_req(req_handler, updated_req, sock, state) do
             {:reply, data} ->
               length = byte_size(data)
               :gen_tcp.send(sock, "HTTP/1.1 200 OK\r\nContent-Length: #{length}\r\n\r\n#{data}")
-              client_close(sock)
+              client_close(sock, log?)
 
             :noreply ->
-              client_close(sock)
+              client_close(sock, log?)
 
             :noclose ->
               wait_loop(sock)
           end
         else
           :gen_tcp.send(sock, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
-          client_close(sock)
+          client_close(sock, log?)
         end
 
       {:http, ^sock, {:http_error, error_line}} ->
-        log "#{inspect pid}: HTTP error on line: #{error_line}"
-        client_close(sock)
+        log log?, "#{inspect pid}: HTTP error on line: #{error_line}"
+        client_close(sock, log?)
 
       {:tcp_closed, ^sock} ->
-        client_close(sock)
+        client_close(sock, log?)
 
       other ->
-        log "Received unhandled message #{inspect other}"
-        client_close(sock)
+        log log?, "Received unhandled message #{inspect other}"
+        client_close(sock, log?)
     end
   end
 
@@ -155,7 +165,7 @@ defmodule Muweb.Server do
       header == "Content-Length"
     end)
     content_length = case length_header do
-      {_, val} -> binary_to_integer(val)
+      {_, val} -> String.to_integer(val)
       _        -> 0
     end
     #IO.inspect sock
@@ -245,8 +255,8 @@ defmodule Muweb.Server do
   end
 
 
-  defp client_close(sock) do
-    log "#{inspect self()}: closing connection"
+  defp client_close(sock, log?) do
+    log log?, "#{inspect self()}: closing connection"
     :gen_tcp.close(sock)
   end
 
