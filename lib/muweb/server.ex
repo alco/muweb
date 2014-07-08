@@ -38,7 +38,7 @@ defmodule Muweb.Server do
     * log_enabled -- whether logging is enabled
 
   """
-  def start(options \\ []) do
+  def start_link(options \\ []) do
     port = Keyword.get(options, :port, 9000)
     case :gen_tcp.listen(port, [{:packet, :http_bin}, {:active, false}, {:reuseaddr, true}]) do
       {:ok, sock} ->
@@ -70,7 +70,7 @@ defmodule Muweb.Server do
     state = options[:state]
     log? = options[:log_enabled]
 
-    pid = spawn(fn -> client_start(sock, req_handler, state, log?) end)
+    pid = spawn_link(fn -> client_start(sock, req_handler, state, log?) end)
     :ok = :gen_tcp.controlling_process(sock, pid)
   end
 
